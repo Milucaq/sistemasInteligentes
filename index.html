@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Detector de Hot Dog</title>
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
+  <link rel="shortcut icon" href="favicon.ico">
+  <link rel="manifest" href="site.webmanifest">
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.5.0"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: #e0e5ec;
+      margin: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      color: #333;
+    }
+
+    #container {
+      background: #e0e5ec;
+      border-radius: 20px;
+      box-shadow: 9px 9px 16px #a3b1c6, -9px -9px 16px #ffffff;
+      padding: 30px;
+      width: 95%;
+      max-width: 500px;
+      text-align: center;
+    }
+
+    h1 { font-size: 1.8rem; margin-bottom: 10px; }
+
+    .loader {
+      border: 6px solid #f3f3f3;
+      border-top: 6px solid #007bff;
+      border-radius: 50%;
+      width: 30px;
+      height: 30px;
+      animation: spin 1s linear infinite;
+      margin: 10px auto;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    video, canvas {
+      border-radius: 16px;
+      width: 100%;
+      max-width: 350px;
+      margin-top: 15px;
+      box-shadow: inset 5px 5px 10px #c3cbdc, inset -5px -5px 10px #ffffff;
+    }
+
+    #resultado {
+      margin-top: 25px;
+      font-size: 1.5rem;
+      font-weight: bold;
+      padding: 20px;
+      border-radius: 16px;
+      transition: all 0.4s ease;
+      min-height: 70px;
+      box-shadow: 5px 5px 15px #babecc, -5px -5px 15px #ffffff;
+    }
+
+    .hotdog { background: #ffebe6; color: #c0392b; }
+    .nohotdog { background: #e6f2ff; color: #2c3e50; }
+
+    #debug {
+      font-size: 0.75rem;
+      margin-top: 20px;
+      background-color: #f9f9f9;
+      border-radius: 12px;
+      padding: 10px;
+      color: #666;
+      text-align: left;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <h1>🌭 Detector de Hot Dog</h1>
+    <div class="loader" id="loader"></div>
+    <video id="video" autoplay muted></video>
+    <canvas id="canvas" style="display: none;" width="300" height="225"></canvas>
+    <div id="resultado">Cargando modelo...</div>
+    <div id="debug"></div>
+  </div>
+
+  <script>
+    const modelo = {
+      instancia: null,
+      cargado: false,
+      inputShape: [1, 100, 100, 1]
+    };
+
+    const elementos = {
+      video: document.getElementById('video'),
+      canvas: document.getElementById('canvas'),
+      resultado: document.getElementById('resultado'),
+      loader: document.getElementById('loader'),
+      debug: document.getElementById('debug')
+    };
+
+    let camara = {
+      stream: null,
+      facingMode: "environment",
+      activa: false
+    };
+
+    async function iniciarAplicacion() {
+      await cargarModelo();
+      await iniciarCamara();
+      comenzarPredicciones();
+    }
+
+    async function cargarModelo() {
+      try {
+        elementos.debug.innerHTML += '⏳ Cargando modelo...<br>';
+        modelo.instancia = await tf.loadGraphModel("model.json");
+        modelo.cargado = true;
+        elementos.loader.style.display = 'none';
+        elementos.resultado.textContent = '✅ Modelo cargado. Activando cámara...';
+        elementos.debug.innerHTML += '✅ Modelo cargado correctamente<br>';
+      } catch (error) {
+        elementos.resultado.textContent = '❌ Error al cargar el modelo';
+        elementos.debug.innerHTML += `❌ Error: ${error.message}<br>`;
+        console.error("Error modelo:", error);
+      }
+    }
+
+    async function iniciarCamara() {
+      if (camara.stream) detenerCamara();
+      try {
+        camara.stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 300, height: 225, facingMode: camara.facingMode },
+          audio: false
+        });
+        elementos.video.srcObject = camara.stream;
+        camara.activa = true;
+        elementos.debug.innerHTML += '📷 Cámara activada<br>';
+      } catch (error) {
+        elementos.resultado.textContent = '❌ Error de cámara';
+        elementos.debug.innerHTML += `❌ Cámara: ${error.message}<br>`;
+        console.error("Cámara error:", error);
+      }
+    }
+
+    function detenerCamara() {
+      camara.stream.getTracks().forEach(track => track.stop());
+      camara.activa = false;
+    }
+
+    function comenzarPredicciones() {
+      if (!modelo.cargado || !camara.activa) {
+        setTimeout(comenzarPredicciones, 500);
+        return;
+      }
+      predecirFrame();
+    }
+
+    async function predecirFrame() {
+      if (!modelo.cargado || !camara.activa) return;
+
+      const ctx = elementos.canvas.getContext('2d');
+      ctx.drawImage(elementos.video, 0, 0, 300, 225);
+
+      const canvasTemp = document.createElement('canvas');
+      canvasTemp.width = 100;
+      canvasTemp.height = 100;
+      const ctxTemp = canvasTemp.getContext('2d');
+      ctxTemp.drawImage(elementos.video, 0, 0, 100, 100);
+
+      try {
+        const tensor = tf.tidy(() => {
+          return tf.browser.fromPixels(canvasTemp)
+            .mean(2)
+            .toFloat()
+            .div(255.0)
+            .expandDims(0)
+            .expandDims(-1);
+        });
+
+        const pred = await modelo.instancia.predict(tensor).data();
+        const prob = pred[0];
+        const esHotdog = prob <= 0.5;
+        actualizarUI(esHotdog, prob);
+        tensor.dispose();
+      } catch (error) {
+        elementos.debug.innerHTML += `❌ Error predicción: ${error.message}<br>`;
+        console.error(error);
+      }
+
+      setTimeout(predecirFrame, 600);
+    }
+
+    function actualizarUI(esHotdog, prob) {
+      if (esHotdog) {
+        elementos.resultado.className = "hotdog";
+        elementos.resultado.innerHTML = `🌭 <b>HOT DOG</b><br>Confianza: ${(1 - prob) * 100 | 0}%`;
+      } else {
+        elementos.resultado.className = "nohotdog";
+        elementos.resultado.innerHTML = `🚫 <b>NO HOT DOG</b><br>Confianza: ${prob * 100 | 0}%`;
+      }
+    }
+
+    window.addEventListener('load', iniciarAplicacion);
+  </script>
+</body>
+</html>
